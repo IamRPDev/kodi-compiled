@@ -37,6 +37,39 @@ jobs:
             libfmt-dev libboost-all-dev libglib2.0-dev libc6-dev \
             dpkg-dev fakeroot zip libpipewire-0.3-dev libspa-0.2-dev
 
+# url=https://github.com/IamRPDev/kodi-compiled/blob/main/.github/workflows/build-deb.yml
+# Add the following step after the apt install step and before the "Build and package" step
+- name: Build and install PipeWire >= 0.3.50 from source
+  run: |
+    set -euo pipefail
+    # Install meson/ninja and extra build deps
+    sudo apt-get install -y --no-install-recommends \
+      meson ninja-build libsystemd-dev libdbus-1-dev libudev-dev libasound2-dev \
+      libjack-jackd2-dev libsndfile1-dev libsndio-dev libudev-dev \
+      libavahi-client-dev libbluetooth-dev libcap-dev libxcb-composite0-dev \
+      pkg-config python3-pip
+    # Ensure modern meson/ninja if necessary
+    python3 -m pip install --user meson==1.2.0 ninja
+    export PATH="$HOME/.local/bin:$PATH"
+
+    # Build and install PipeWire
+    PW_VERSION="0.3.63"   # choose a recent release >= 0.3.50
+    PW_DIR="${RUNNER_TEMP:-/tmp}/pipewire-src"
+    rm -rf "$PW_DIR"
+    git clone --depth 1 --branch "v${PW_VERSION}" https://gitlab.freedesktop.org/pipewire/pipewire.git "$PW_DIR"
+    cd "$PW_DIR"
+
+    # Prepare a build dir and run meson/ninja
+    meson setup build -Ddefault_library=shared -Ddocumentation=false -Dsystemd=true -Dman=false
+    meson compile -C build -v
+    sudo meson install -C build
+
+    # Make sure pkg-config can find the new files and linker can find libs
+    export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}
+    export LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}
+    # Verify version visible via pkg-config
+    pkg-config --modversion pipewire || true
+
       - name: Build and package
         run: |
           set -euo pipefail
