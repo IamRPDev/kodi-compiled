@@ -35,7 +35,7 @@ jobs:
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
             libgl1-mesa-dev libgles2-mesa-dev libwayland-dev libxkbcommon-dev \
             libfmt-dev libboost-all-dev libglib2.0-dev libc6-dev \
-            dpkg-dev fakeroot zip
+            dpkg-dev fakeroot zip libpipewire-0.3-dev libspa-0.2-dev
 
       - name: Build and package
         run: |
