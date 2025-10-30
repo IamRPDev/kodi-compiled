@@ -35,46 +35,51 @@ jobs:
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
             libgl1-mesa-dev libgles2-mesa-dev libwayland-dev libxkbcommon-dev \
             libfmt-dev libboost-all-dev libglib2.0-dev libc6-dev \
-            dpkg-dev fakeroot zip libpipewire-0.3-dev libspa-0.2-dev
+            dpkg-dev fakeroot zip \
+            # Helpful PipeWire dev packages if available in runner repos
+            libpipewire-0.3-dev libspa-0.2-dev || true
 
-# url=https://github.com/IamRPDev/kodi-compiled/blob/main/.github/workflows/build-deb.yml
-# Add the following step after the apt install step and before the "Build and package" step
-- name: Build and install PipeWire >= 0.3.50 from source
-  run: |
-    set -euo pipefail
-    # Install meson/ninja and extra build deps
-    sudo apt-get install -y --no-install-recommends \
-      meson ninja-build libsystemd-dev libdbus-1-dev libudev-dev libasound2-dev \
-      libjack-jackd2-dev libsndfile1-dev libsndio-dev libudev-dev \
-      libavahi-client-dev libbluetooth-dev libcap-dev libxcb-composite0-dev \
-      pkg-config python3-pip
-    # Ensure modern meson/ninja if necessary
-    python3 -m pip install --user meson==1.2.0 ninja
-    export PATH="$HOME/.local/bin:$PATH"
+      - name: Build and install PipeWire >= 0.3.50 from source
+        run: |
+          set -euo pipefail
+          # Install meson/ninja and extra build deps
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build libsystemd-dev libdbus-1-dev libudev-dev libasound2-dev \
+            libjack-jackd2-dev libsndfile1-dev libsndio-dev \
+            libavahi-client-dev libbluetooth-dev libcap-dev libxcb-composite0-dev \
+            pkg-config python3-pip python3-setuptools python3-wheel git build-essential \
+            pkgconf
+          # Ensure modern meson/ninja if necessary (install in user to avoid needing sudo pip)
+          python3 -m pip install --user "meson>=1.1.0" ninja
+          export PATH="$HOME/.local/bin:$PATH"
 
-    # Build and install PipeWire
-    PW_VERSION="0.3.63"   # choose a recent release >= 0.3.50
-    PW_DIR="${RUNNER_TEMP:-/tmp}/pipewire-src"
-    rm -rf "$PW_DIR"
-    git clone --depth 1 --branch "v${PW_VERSION}" https://gitlab.freedesktop.org/pipewire/pipewire.git "$PW_DIR"
-    cd "$PW_DIR"
+          # Build and install PipeWire
+          PW_VERSION="0.3.63"   # choose a recent release >= 0.3.50
+          PW_DIR="${RUNNER_TEMP:-/tmp}/pipewire-src"
+          rm -rf "$PW_DIR"
+          git clone --depth 1 --branch "v${PW_VERSION}" https://gitlab.freedesktop.org/pipewire/pipewire.git "$PW_DIR"
+          cd "$PW_DIR"
 
-    # Prepare a build dir and run meson/ninja
-    meson setup build -Ddefault_library=shared -Ddocumentation=false -Dsystemd=true -Dman=false
-    meson compile -C build -v
-    sudo meson install -C build
+          # Configure and build with meson/ninja
+          meson setup build -Ddefault_library=shared -Ddocumentation=false -Dsystemd=true -Dman=false
+          meson compile -C build -v
+          sudo meson install -C build
 
-    # Make sure pkg-config can find the new files and linker can find libs
-    export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}
-    export LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}
-    # Verify version visible via pkg-config
-    pkg-config --modversion pipewire || true
+          # Make sure pkg-config can find the new files and linker can find libs
+          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+          # Sanity: show installed versions
+          echo "pipewire (pkg-config):" && pkg-config --modversion pipewire || true
+          echo "spa-0.2 (pkg-config):" && pkg-config --modversion spa-0.2 || true
+          ls -l /usr/local/lib | sed -n '1,200p' || true
 
       - name: Build and package
         run: |
           set -euo pipefail
           mkdir -p build
           cd build
+          # Configure a default build. Adjust -DENABLE_... flags as needed.
           cmake -S ../xbmc -B . -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=${KODI_INSTALL_PREFIX} \
@@ -85,26 +90,33 @@ jobs:
             -DENABLE_VAAPI=ON \
             -DENABLE_V4L=ON
           ninja -v -j $(nproc)
+          # Install into a staging dir for packaging
           STAGING_DIR="${{ github.workspace }}/pkg-staging"
           rm -rf "${STAGING_DIR}"
           mkdir -p "${STAGING_DIR}"
           ninja install DESTDIR="${STAGING_DIR}"
+          # Prepare Debian package directory layout
           PKG_DIR="${{ github.workspace }}/kodi-deb"
           rm -rf "${PKG_DIR}"
           mkdir -p "${PKG_DIR}${KODI_INSTALL_PREFIX}"
           cp -a "${STAGING_DIR}${KODI_INSTALL_PREFIX}/." "${PKG_DIR}${KODI_INSTALL_PREFIX}/"
+          # Add control files
           mkdir -p "${PKG_DIR}/DEBIAN"
           sed \
             -e "s|%VERSION%|$(date +%Y%m%d)-${GITHUB_SHA::7}|g" \
             -e "s|%ARCH%|amd64|g" \
             packaging/control.template > "${PKG_DIR}/DEBIAN/control"
+          # Copy maintainer scripts if present
           if [ -f packaging/postinst ]; then
             install -m 0755 packaging/postinst "${PKG_DIR}/DEBIAN/postinst"
           fi
           if [ -f packaging/prerm ]; then
             install -m 0755 packaging/prerm "${PKG_DIR}/DEBIAN/prerm"
           fi
+          # Set permissions for DEBIAN
           chmod -R 0755 "${PKG_DIR}/DEBIAN"
+          # Build the .deb
+          mkdir -p "${{ github.workspace }}/out"
           PKG_NAME="kodi-$(date +%Y%m%d)-${GITHUB_SHA::7}_amd64.deb"
           dpkg-deb --build "${PKG_DIR}" "${{ github.workspace }}/out/${PKG_NAME}"
           ls -lh out || true
