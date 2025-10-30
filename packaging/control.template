@@ -1,0 +1,9 @@
+Package: kodi
+Version: %VERSION%
+Section: misc
+Priority: optional
+Architecture: %ARCH%
+Depends: libc6 (>= 2.34), libstdc++6 (>= 11), libx11-6, libgl1, libasound2, libpulse0, libssl1.1, libavcodec58, libavformat58, libswscale5
+Maintainer: RPDev <rpdisselldev@gmail.com>
+Description: Kodi media center (packaged by kodi-compiled)
+ This package installs Kodi into /opt/kodi and does not replace distro packages.

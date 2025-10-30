@@ -1,0 +1,91 @@
+name: Build Kodi .deb (Mint 22.2 / Ubuntu 22.04)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-deb:
+    name: Build Kodi and create .deb
+    runs-on: ubuntu-22.04
+    env:
+      REPO: xbmc/xbmc
+      KODI_INSTALL_PREFIX: /opt/kodi
+    steps:
+      - name: Checkout this repo (packaging and workflow)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Clone xbmc/xbmc (shallow)
+        run: |
+          git clone --depth 1 https://github.com/xbmc/xbmc.git xbmc
+
+      - name: Install build & packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config git python3 python3-pip \
+            autoconf automake libtool gettext curl \
+            libx11-dev libxrandr-dev libxinerama-dev libxss-dev libxext-dev \
+            libasound2-dev libpulse-dev libudev-dev libdbus-1-dev \
+            libssl-dev libcurl4-openssl-dev libsmbclient-dev libnfs-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libgl1-mesa-dev libgles2-mesa-dev libwayland-dev libxkbcommon-dev \
+            libfmt-dev libboost-all-dev libglib2.0-dev libc6-dev \
+            dpkg-dev fakeroot zip
+
+      - name: Build and package
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          cd build
+          cmake -S ../xbmc -B . -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=${KODI_INSTALL_PREFIX} \
+            -DENABLE_TESTS=OFF \
+            -DENABLE_ADDONS=ON \
+            -DENABLE_PULSEAUDIO=ON \
+            -DENABLE_PIPEWIRE=ON \
+            -DENABLE_VAAPI=ON \
+            -DENABLE_V4L=ON
+          ninja -v -j $(nproc)
+          STAGING_DIR="${{ github.workspace }}/pkg-staging"
+          rm -rf "${STAGING_DIR}"
+          mkdir -p "${STAGING_DIR}"
+          ninja install DESTDIR="${STAGING_DIR}"
+          PKG_DIR="${{ github.workspace }}/kodi-deb"
+          rm -rf "${PKG_DIR}"
+          mkdir -p "${PKG_DIR}${KODI_INSTALL_PREFIX}"
+          cp -a "${STAGING_DIR}${KODI_INSTALL_PREFIX}/." "${PKG_DIR}${KODI_INSTALL_PREFIX}/"
+          mkdir -p "${PKG_DIR}/DEBIAN"
+          sed \
+            -e "s|%VERSION%|$(date +%Y%m%d)-${GITHUB_SHA::7}|g" \
+            -e "s|%ARCH%|amd64|g" \
+            packaging/control.template > "${PKG_DIR}/DEBIAN/control"
+          if [ -f packaging/postinst ]; then
+            install -m 0755 packaging/postinst "${PKG_DIR}/DEBIAN/postinst"
+          fi
+          if [ -f packaging/prerm ]; then
+            install -m 0755 packaging/prerm "${PKG_DIR}/DEBIAN/prerm"
+          fi
+          chmod -R 0755 "${PKG_DIR}/DEBIAN"
+          PKG_NAME="kodi-$(date +%Y%m%d)-${GITHUB_SHA::7}_amd64.deb"
+          dpkg-deb --build "${PKG_DIR}" "${{ github.workspace }}/out/${PKG_NAME}"
+          ls -lh out || true
+
+      - name: Upload artifact (.deb)
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodi-deb
+          path: out/*.deb
+
+      - name: Create GitHub Release and upload .deb
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: out/*.deb
+          tag: build-${{ github.run_id }}
+          name: kodi-deb-${{ github.run_id }}
+          body: "Automated Kodi .deb build for Linux Mint 22.2 (Ubuntu 22.04 runner)."
